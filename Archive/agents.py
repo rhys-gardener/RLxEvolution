@@ -1,30 +1,19 @@
 import tensorflow as tf
 from tensorflow.keras.models import Model, load_model
-from tensorflow.keras.layers import Input, Dense, Flatten, Conv2D
+from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras.optimizers import Adam, RMSprop, Adagrad, Adadelta
 from tensorflow.keras import backend as K
 
 import numpy as np
 
-from kaggle_environments.envs.hungry_geese.hungry_geese import Observation, Configuration, Action
-
-GLOBAL_ACTIONS = ['NORTH','SOUTH','WEST','EAST']
-from random import choice
-
 class ContinuousActorModel():
     def __init__(self, input_shape, action_space, lr, optimizer):
-
         X_input = Input(input_shape)
         self.action_space = action_space
-        """
+        
         X = Dense(512, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X_input)
         X = Dense(256, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
         X = Dense(64, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        """
-        X = Conv2D(160,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X_input)
-        X = Conv2D(80,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        X = Conv2D(64,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        X = Flatten()(X)
         output = Dense(self.action_space, activation="tanh")(X)
 
         self.Actor = Model(inputs = X_input, outputs = output)
@@ -61,7 +50,6 @@ class ContinuousActorModel():
         return self.Actor.predict(state)
     
     def act(self, state):
-        state = np.expand_dims(state, axis=0)
         pred = self.Actor.predict(state)
         low, high = -1.0, 1.0 # -1 and 1 are boundaries of tanh
         action = pred + np.random.uniform(low, high, size=pred.shape) * self.std
@@ -82,19 +70,12 @@ class ContinuousActorModel():
 
 class DiscreteActorModel:
     def __init__(self, input_shape, action_space, lr, optimizer):
-
         X_input = Input(input_shape)
         self.action_space = action_space
 
-        X = Conv2D(64,(1,1), activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X_input)
-        X = Conv2D(32,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-
-        #X = Conv2D(128,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        #X = Conv2D(64,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        X = Flatten()(X)
+        X = Dense(512, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X_input)
         X = Dense(256, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
         X = Dense(64, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        X = Flatten()(X)
         output = Dense(self.action_space, activation="softmax")(X)
 
         self.Actor = Model(inputs = X_input, outputs = output)
@@ -106,8 +87,8 @@ class DiscreteActorModel:
     def ppo_loss(self, y_true, y_pred):
         # Defined in https://arxiv.org/abs/1707.06347
         advantages, prediction_picks, actions = y_true[:, :1], y_true[:, 1+self.action_space:], y_true[:, 1:1+self.action_space]
-        LOSS_CLIPPING = 0.3
-        ENTROPY_LOSS = 0.0
+        LOSS_CLIPPING = 0.2
+        ENTROPY_LOSS = 0.001
         
         prob = actions * y_pred
         old_prob = actions * prediction_picks
@@ -133,18 +114,18 @@ class DiscreteActorModel:
     
     def act(self, state):
         # Use the network to predict the next action to take, using the model
-
-        state = np.expand_dims(state, axis=0)
-        prediction = self.Actor.predict(state)[-1]
+        prediction = self.Actor.predict(state)[0]
         action = np.random.choice(self.action_space, p=prediction)
-        return action, prediction
+        action_onehot = np.zeros([self.action_space])
+        action_onehot[action] = 1
+        return action, action_onehot, prediction
 
     def mutate(self):
         for layer in self.Actor.layers:
             if len(layer.get_weights()) > 0:
                 new_weights = [
-                    layer.get_weights()[0] + np.random.normal(0, 0.03, layer.get_weights()[0].shape),
-                    layer.get_weights()[1] + np.random.normal(0, 0.03, layer.get_weights()[1].shape)
+                    layer.get_weights()[0] + np.random.normal(0, 0.05, layer.get_weights()[0].shape),
+                    layer.get_weights()[1] + np.random.normal(0, 0.05, layer.get_weights()[1].shape)
                 ]
                 layer.set_weights(new_weights)
 
@@ -154,15 +135,9 @@ class CriticModel:
         X_input = Input(input_shape)
         old_values = Input(shape=(1,))
 
-        V = Conv2D(64,(1,1), activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X_input)
-        V = Conv2D(32,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(V)
-
-        #V = Conv2D(128,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(V)
-        #X = Conv2D(64,1, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(X)
-        V = Flatten()(V)
-        V= Dense(256, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(V)
-        V = Dense(64, activation="relu", kernel_initializer=tf.random_normal_initializer(stddev=0.01))(V)
-        V= Flatten()(V)
+        V = Dense(512, activation="relu", kernel_initializer='he_uniform')(X_input)
+        V = Dense(256, activation="relu", kernel_initializer='he_uniform')(V)
+        V = Dense(64, activation="relu", kernel_initializer='he_uniform')(V)
         value = Dense(1, activation=None)(V)
 
         self.Critic = Model(inputs=[X_input, old_values], outputs = value)
@@ -182,78 +157,3 @@ class CriticModel:
 
     def predict(self, state):
         return self.Critic.predict([state, np.zeros((state.shape[0], 1))])
-
-
-
-def row_col(position, columns):
-    return position // columns, position 
-
-def adjacent_positions(position: int, columns: int, rows: int):
-    return [
-        translate(position, action, columns, rows)
-        for action in Action
-    ]
-
-
-def min_distance(position, food, columns):
-    row, column = row_col(position, columns)
-    return min(
-        abs(row - food_row) + abs(column - food_column)
-        for food_position in food
-        for food_row, food_column in [row_col(food_position, columns)]
-    )
-
-def translate(position, direction, columns, rows):
-    row, column = row_col(position, columns)
-    row_offset, column_offset = direction.to_row_col()
-    row = (row + row_offset) % rows
-    column = (column + column_offset) % columns
-    return row * columns + column
-
-
-class GreedyAgentCustom:
-    def __init__(self, configuration: Configuration):
-        self.configuration = configuration
-        self.last_action = None
-
-    def call(self, state, index):
-        
-        observation = state[0].observation
-        rows, columns = self.configuration.rows, self.configuration.columns
-
-        food = observation.food
-        geese = observation.geese
-        geese_idx = index
-        opponents = [
-            goose
-            for index, goose in enumerate(geese)
-            if index != geese_idx and len(goose) > 0
-        ]
-
-        # Don't move adjacent to any heads
-        head_adjacent_positions = {
-            opponent_head_adjacent
-            for opponent in opponents
-            for opponent_head in [opponent[0]]
-            for opponent_head_adjacent in adjacent_positions(opponent_head, columns, rows)
-        }
-        # Don't move into any bodies
-        bodies = {position for goose in geese for position in goose}
-
-        # Move to the closest food
-        position = geese[geese_idx][0]
-        actions = {
-            action: min_distance(new_position, food, columns)
-            for action in Action
-            for new_position in [translate(position, action, columns, rows)]
-            if (
-                new_position not in head_adjacent_positions and
-                new_position not in bodies and
-                (self.last_action is None or action != self.last_action.opposite())
-            )
-        }
-
-        action = min(actions, key=actions.get) if any(actions) else choice([action for action in Action])
-        self.last_action = action
-        
-        return GLOBAL_ACTIONS.index(action.name)

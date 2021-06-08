@@ -133,3 +133,10 @@ RLxEvolution/*
 logs/*
 data/*
 runs/*
+models/*
+saved_models/*
+critics/*
+winning_actors/*
+working_models/*
+*.csv
+.vscode/*
